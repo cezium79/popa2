@@ -107,7 +107,8 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
        * Основная функция парсинга QR-кода.
        * Здесь реализована логика автоматического старта обхода при первом сканировании.
        */
-      fun parseQrCode(rawText: String): QrResult {
+      fun parseQrCode(rawText: String, prefsManager: SharedPrefsManager): QrResult {
+
           val trimmed = rawText.trim()
 
           if (trimmed.equals("отчет о смене", ignoreCase = true)) {
@@ -158,12 +159,20 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
 
                   // БЛОК 2: ОБЫЧНЫЙ ЧЕКПОИНТ (без доп. действий)
                   json.has("type") && json.getString("type") == "checkpoint" -> {
-                      // ... вся существующая логика для обычного чекпоинта остается здесь ...
                       val checkpointId = json.optString("id", "")
                       val name = json.getString("name")
                       val currentTime = dateFormat.format(Date())
-
                       val activeRoute = activeRounds[DEFAULT_ROUND_KEY]
+
+                      if (!prefsManager.isStrictSequenceEnabled()) {
+                          saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime)
+                          QrResult.CheckpointPassed(checkpointId, name, currentTime)
+                      } else {
+                          // Старая логика проверки последовательности
+                          val activeRoute = activeRounds[DEFAULT_ROUND_KEY]
+                          // ... (логика с validateAndAdvance)
+                      }
+
                       if (activeRoute != null) {
                           val (isValid, expectedId) = activeRoute.validateAndAdvance(checkpointId)
                           if (isValid) {
@@ -182,9 +191,10 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
                           }
                       } else {
                           startNewRound(DEFAULT_ROUND_KEY, defaultCheckpointIds)
-                          // Повторно вызываем парсер, чтобы он зашел в ветку 'activeRoute != null'
-                          return parseQrCode(rawText)
+                          // ИСПРАВЛЕНО: Передаем prefsManager дальше в рекурсивный вызов
+                          return parseQrCode(rawText, prefsManager)
                       }
+
                   }
 
                   // БЛОК 3: ПРОСТОЙ ВОПРОС

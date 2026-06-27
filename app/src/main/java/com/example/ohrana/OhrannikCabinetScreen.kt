@@ -174,55 +174,26 @@ fun OhrannikCabinetScreen(
                                                                 isScanRequested = false
 
                                                                 // Отправляем строку на разбор парсеру QrHandler
-                                                                val parsed = QrHandler.parseQrCode(rawValue)
+                                                                 val qrResult = QrHandler.parseQrCode(barcode.rawValue ?: "", manager)
+
 
 // --- НОВЫЙ БЛОК ОБРАБОТКИ РЕЗУЛЬТАТА ---
-                                                                when (parsed) {
-                                                                    // 1. УСПЕШНО ПРОЙДЕННЫЙ ЧЕКПОИНТ (Новый тип CheckpointPassed)
+                                                                when (qrResult) {
                                                                     is QrResult.CheckpointPassed -> {
-                                                                        // Просто сохраняем результат в переменную состояния.
-                                                                        // Compose автоматически перерисует экран и покажет диалог,
-                                                                        // так как значение переменной изменилось с null на объект.
-
-                                                                        showCheckpointPassedDialog = parsed
-
-                                                                        // Сохраняем лог по старой схеме менеджера
-                                                                        val logText = "Метка локации: ${parsed.name} (Отметка пройдена)"
-                                                                        manager.saveScanResult(employeeName = employeeName, qrContent = logText)
+                                                                        // Ваша логика при успешном проходе точки
+                                                                        android.widget.Toast.makeText(context, "Точка пройдена: ${qrResult.name}", android.widget.Toast.LENGTH_SHORT).show()
                                                                     }
-
-                                                                    // 2. ОШИБКА ПОСЛЕДОВАТЕЛЬНОСТИ (Новый тип SequenceError)
                                                                     is QrResult.SequenceError -> {
-                                                                        // Показываем сообщение об ошибке
-                                                                        val errorMessage = if (parsed.expectedCheckpointId != null) {
-                                                                            "Ошибка! Нарушена последовательность обхода.\n" +
-                                                                                    "Ожидался чекпоинт с ID: ${parsed.expectedCheckpointId}"
-                                                                        } else {
-                                                                            "Ошибка! Вы пытаетесь пройти лишний чекпоинт или маршрут уже завершен."
-                                                                        }
-                                                                        showErrorDialog = "$errorMessage\n${parsed.message}"
+                                                                        // Логика при ошибке последовательности
+                                                                        android.widget.Toast.makeText(context, qrResult.message, android.widget.Toast.LENGTH_LONG).show()
                                                                     }
-
-                                                                    // 3. ВОПРОС (Тип остался, но обрабатывается после новых проверок)
-                                                                    is QrResult.QuestionFormat -> {
-                                                                        showQuestionDialog = parsed
-                                                                    }
-
-                                                                    // 4. ВВОД ДАННЫХ (Тип остался, но обрабатывается после новых проверок)
-                                                                    is QrResult.InputFormat -> {
-                                                                        inputTextValue = ""
-                                                                        showInputDialog = parsed
-                                                                    }
-
-                                                                    // 5. ОТЧЕТ О СМЕНЕ (Тип остался)
                                                                     is QrResult.ShiftReportTrigger -> {
-                                                                        // Логика генерации отчета...
+                                                                        onNavigateToReports()
                                                                     }
-
-                                                                    // 6. ОБЩАЯ ОШИБКА ПАРСИНГА (Тип остался)
                                                                     is QrResult.Error -> {
-                                                                        showErrorDialog = parsed.message
+                                                                        android.widget.Toast.makeText(context, qrResult.message, android.widget.Toast.LENGTH_SHORT).show()
                                                                     }
+                                                                    else -> { /* Для остальных типов (вопросы, ввод) */ }
                                                                 }
 // -------------------------------------
                                                                 break // Прерываем цикл, так как нужный код найден и обработан

@@ -15,6 +15,42 @@ class SharedPrefsManager(private val context: Context) {
     // ОБНОВЛЕНО: Новый, понятный формат даты для логов и смен
     private val dateFormat = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.US)
     // --- МЕТОДЫ УПРАВЛЕНИЯ СМЕНОЙ ОХРАННИКА ---
+// Включен ли строгий контроль последовательности сканирования (true/false)
+    fun isStrictSequenceEnabled(): Boolean {
+        return prefs.getBoolean("strict_sequence_enabled", false)
+    }
+
+    fun setStrictSequenceEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("strict_sequence_enabled", enabled).apply()
+    }
+
+    // Сохранить текущий рабочий маршрут (список названий точек через запятую)
+    fun saveCurrentRouteCheckpoints(points: List<String>) {
+        prefs.edit().putString("active_route_points", points.joinToString(",")).apply()
+    }
+
+    // Получить список точек текущего активного маршрута
+    fun getActiveRouteCheckpoints(): List<String> {
+        val saved = prefs.getString("active_route_points", "") ?: ""
+        if (saved.isEmpty()) {
+            // Дефолтный тестовый маршрут, если админ ничего не настроил в "routes"
+            return listOf("Точка 1", "Точка 2", "Точка 3")
+        }
+        return saved.split(",")
+    }
+
+    // Получить индекс чекпоинта, который мы ждем от сканера (начиная с 0)
+    fun getCurrentCheckpointIndex(): Int {
+        return prefs.getInt("active_route_current_index", 0)
+    }
+
+    fun updateCurrentCheckpointIndex(index: Int) {
+        prefs.edit().putInt("active_route_current_index", index).apply()
+    }
+
+    fun resetRouteProgress() {
+        prefs.edit().putInt("active_route_current_index", 0).apply()
+    }
 
     // Начать новую смену (сохраняем имя и время старта)
     fun startNewShift(employeeName: String) {
@@ -240,3 +276,4 @@ class SharedPrefsManager(private val context: Context) {
         }.sortedBy { it.id }
     }
 }
+
