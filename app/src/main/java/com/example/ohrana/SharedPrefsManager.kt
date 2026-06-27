@@ -12,19 +12,25 @@ data class QrScanRecord(val employeeName: String, val time: String, val qrConten
 class SharedPrefsManager(private val context: Context) {
     private val prefs = context.getSharedPreferences("ohrana_prefs", Context.MODE_PRIVATE)
 
-    // Формат даты вынесен в константу для единообразия логов
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    // ОБНОВЛЕНО: Новый, понятный формат даты для логов и смен
+    private val dateFormat = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.US)
     // --- МЕТОДЫ УПРАВЛЕНИЯ СМЕНОЙ ОХРАННИКА ---
 
     // Начать новую смену (сохраняем имя и время старта)
-    fun startNewShift(employeeName: String, startTime: String) {
+    fun startNewShift(employeeName: String) {
+        val currentTime = dateFormat.format(Date()) // Генерирует строку вида "27.06.2026 15:30:00"
         prefs.edit().apply {
             putString("active_shift_employee", employeeName)
-            putString("active_shift_start_time", startTime)
+            putString("active_shift_start_time", currentTime)
             putBoolean("active_shift_is_running", true)
             apply()
         }
     }
+    // Просто возвращает true, если смена запущена на устройстве, и false, если закрыта
+    fun isShiftActive(): Boolean {
+        return prefs.getBoolean("active_shift_is_running", false)
+    }
+
 
     // Проверить, идет ли сейчас активная смена у конкретного сотрудника
     fun isShiftActiveFor(employeeName: String): Boolean {
@@ -36,15 +42,13 @@ class SharedPrefsManager(private val context: Context) {
     // Получить время начала текущей смены
     fun getShiftStartTime(): String = prefs.getString("active_shift_start_time", "-") ?: "-"
 
-    // Закрыть смену
-    fun closeCurrentShift() {
-        prefs.edit().apply {
-            putBoolean("active_shift_is_running", false)
-            remove("active_shift_employee")
-            remove("active_shift_start_time")
-            apply()
-        }
-    }
+
+
+
+
+    // Дополнительный метод (пригодится для вывода на экран отчетов)
+    fun getShiftEndTime(): String = prefs.getString("active_shift_end_time", "-") ?: "-"
+
     // Получить имя сотрудника, у которого сейчас открыта смена (чтобы сделать автопереход)
     fun getActiveShiftEmployeeName(): String {
         val isRunning = prefs.getBoolean("active_shift_is_running", false)
@@ -52,6 +56,20 @@ class SharedPrefsManager(private val context: Context) {
             prefs.getString("active_shift_employee", "") ?: ""
         } else {
             ""
+        }
+    }
+    // Закрыть смену (с фиксацией времени закрытия)
+    fun closeCurrentShift() {
+        val endTime = dateFormat.format(Date()) // Генерирует время закрытия, например "27.06.2026 10:15:00"
+
+        prefs.edit().apply {
+            putBoolean("active_shift_is_running", false)
+            putString("active_shift_end_time", endTime) // ФИКСАЦИЯ: Сохраняем время закрытия
+
+            // Удаляем данные сотрудника, так как смена завершена
+            remove("active_shift_employee")
+            remove("active_shift_start_time")
+            apply()
         }
     }
 

@@ -1,36 +1,24 @@
 package com.example.ohrana
 
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import android.content.Context
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
-import androidx.camera.core.Preview
-import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import com.example.ohrana.CameraScannerScreen
-import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.unit.dp
-
-
 
 
 class MainActivity : ComponentActivity() {
@@ -134,21 +122,25 @@ fun AppNavigation() {
     when (currentScreen) {
         "privet" -> PrivetScreen(
             onNavigateToOhrannik = {
-                // ИНТЕЛЛЕКТУАЛЬНЫЙ ПЕРЕХВАТ НА СТАРТЕ:
-                // Смотрим, есть ли в системе вообще чья-то запущенная смена
+                // Читаем имя и состояние флага напрямую из хранилища
                 val activeGuardName = prefsManager.getActiveShiftEmployeeName()
+                val isShiftRunning = prefsManager.isShiftActive() // Используем чистый флаг!
 
-                if (activeGuardName.isNotEmpty()) {
-                    // Смена идет! Игнорируем выбор фамилий, подставляем имя и сразу шлем в ShiftControl
+                // Если флаг равен true И имя действительно записано
+                if (isShiftRunning && activeGuardName.isNotEmpty() && activeGuardName != "-") {
                     selectedEmployeeName = activeGuardName
                     currentScreen = "shift_control"
                 } else {
-                    // Смен нет, всё как обычно — отправляем выбирать фамилию
+                    // Если смена закрыта — гарантированно очищаем оперативку и открываем список
+                    selectedEmployeeName = ""
                     currentScreen = "ohrannik"
                 }
             },
             onNavigateToAdministrator = { showPasswordDialog = true }
         )
+
+
+
 
         "ohrannik" -> OhrannikScreen(
             employees = employeeList,
@@ -163,33 +155,45 @@ fun AppNavigation() {
                     currentScreen = "shift_control"
                 }
             },
-            onBack = { currentScreen = "privet" }
+            onBack = {
+                currentScreen = "privet"
+                //  стираем имя из оперативной памяти приложения если сразу выходим не выбирая фамилии
+                selectedEmployeeName = "" }
         )
 
 
 
         "shift_control" -> OhrannikShiftControlScreen(
             employeeName = selectedEmployeeName,
+            selectedEmployeeName = selectedEmployeeName,
             onStartShiftSuccess = {
-                currentScreen = "ohrannik_cabinet" // После СТАРТа уходим в камеру
+                prefsManager.startNewShift(selectedEmployeeName)
+                currentScreen = "ohrannik_cabinet"
             },
             onContinueShift = {
-                currentScreen = "ohrannik_cabinet" // При нажатии ПРОДОЛЖИТЬ уходим в камеру
+                currentScreen = "ohrannik_cabinet"
             },
             onShiftClosedSuccess = {
+                // ИСПРАВЛЕНО: Убрали дублирующий вызов closeCurrentShift(),
+                // так как кнопка СТОП уже сделала это перед созданием отчета!
+
+                selectedEmployeeName = "" // Просто стираем имя из оперативной памяти
                 previousScreenWasAdmin = false
-                currentScreen = "spisok_otchetov" // После СТОПа уходим в отчеты
+                currentScreen = "privet" // Возвращаемся в начало
             },
             onBack = {
-                // Кнопка "Назад" с этого экрана теперь ВСЕГДА выбрасывает в окно privet
                 currentScreen = "privet"
             }
         )
 
+
+
+
+
         "ohrannik_cabinet" -> OhrannikCabinetScreen(
+            // ИСПРАВЛЕНО: параметр внутри функции называется employeeName!
             employeeName = selectedEmployeeName,
             onLogout = {
-                // Из окна камеры при нажатии "Выход/Назад" выбрасывает СТРОГО в окно privet
                 currentScreen = "privet"
             },
             onNavigateToReports = {
@@ -197,7 +201,6 @@ fun AppNavigation() {
                 currentScreen = "spisok_otchetov"
             }
         )
-
 
 
 
@@ -247,11 +250,8 @@ fun AppNavigation() {
         // Дополнительный экран: Список отчетов
         "spisok_otchetov" -> SpisokOtchetovScreen(
             onBack = {
-                if (previousScreenWasAdmin) {
-                    currentScreen = "admin" // Если пришел админ — возвращаем в админку
-                } else {
-                    currentScreen = "ohrannik_cabinet" // Если охранник — возвращаем в кабинет
-                }
+                currentScreen = "privet"
+
             }
         )
 

@@ -47,9 +47,8 @@ fun OhrannikCabinetScreen(
 
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    val shiftStartTime = remember {
-        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-    }
+    // ИСПРАВЛЕНО: Берем точное сохраненное время старта смены из памяти устройства
+    val shiftStartTime = remember { manager.getShiftStartTime() }
 
     var hasCameraPermission by remember {
         mutableStateOf(

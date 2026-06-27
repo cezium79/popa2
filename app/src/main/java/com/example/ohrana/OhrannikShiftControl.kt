@@ -24,17 +24,23 @@ fun OhrannikShiftControlScreen(
     onStartShiftSuccess: () -> Unit,      // Вызывается при первом СТАРТЕ смены
     onContinueShift: () -> Unit,          // Вызывается при нажатии ПРОДОЛЖИТЬ
     onShiftClosedSuccess: () -> Unit,     // Вызывается при СТОПЕ смены
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    selectedEmployeeName: String
 ) {
     val context = LocalContext.current
     val prefsManager = remember { SharedPrefsManager(context) }
     val dateTimeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
-    var isShiftActive by remember { mutableStateOf(prefsManager.isShiftActiveFor(employeeName)) }
+    // Инициализируем состояние экрана напрямую из вашей функции проверки флага
+    var isShiftActive by remember { mutableStateOf(prefsManager.isShiftActive()) }
+
     val shiftStartTime = remember { prefsManager.getShiftStartTime() }
 
     // 🔥 СТАТУС ДЛЯ ОТОБРАЖЕНИЯ ЖУРНАЛА ОБХОДОВ
     var showLogsDialog by remember { mutableStateOf(false) }
+    // Переменная для отображения окна успешного закрытия смены
+    var showGoodbyeDialog by remember { mutableStateOf(false) }
+
 
     // 🔔 ВСПЛЫВАЮЩЕЕ ОКНО С ИСТОРИЕЙ ОБХОДОВ ТЕКУЩЕЙ СМЕНЫ
     if (showLogsDialog) {
@@ -71,6 +77,26 @@ fun OhrannikShiftControlScreen(
             }
         )
     }
+    // 🚪 ВСПЛЫВАЮЩЕЕ ОКНО ПРОЩАНИЯ ПРИ ЗАКРЫТИИ СМЕНЫ
+    if (showGoodbyeDialog) {
+        AlertDialog(
+            onDismissRequest = { /* Не позволяем закрыть кликом мимо окна, чтобы точно прочитал */ },
+            title = { Text("Смена успешно завершена", fontWeight = FontWeight.Bold) },
+            text = { Text("Смена закрыта. До свидания!", fontSize = 16.sp) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showGoodbyeDialog = false // Скрываем окно
+                         prefsManager.closeCurrentShift()// НА ВСЯКИЙ СЛУЧАЙ дублируем вызов здесь, чтобы изменения точно записались на диск:
+                        onShiftClosedSuccess()    // ТОЛЬКО ТЕПЕРЬ уходим на экран "Привет"
+                    }
+                ) {
+                    Text("ОК")
+                }
+            }
+        )
+    }
+
 
     Scaffold(
         topBar = {
@@ -101,7 +127,9 @@ fun OhrannikShiftControlScreen(
             )
 
             if (isShiftActive) {
+                // === ЭТОТ БЛОК ПОКАЗЫВАЕТСЯ, ТОЛЬКО ЕСЛИ СМЕНА ОТКРЫТА ===
                 Text(text = "СТАТУС: СМЕНА ОТКРЫТА", fontSize = 16.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+
                 Text(
                     text = "Время начала: $shiftStartTime",
                     fontSize = 14.sp,
@@ -109,7 +137,7 @@ fun OhrannikShiftControlScreen(
                     modifier = Modifier.padding(bottom = 32.dp)
                 )
 
-                // 1. Кнопка "ПРОДОЛЖИТЬ ОБХОД" (Основное действие)
+                // 1. Кнопка "ПРОДОЛЖИТЬ ОБХОД"
                 Button(
                     onClick = onContinueShift,
                     modifier = Modifier
@@ -121,7 +149,7 @@ fun OhrannikShiftControlScreen(
                     Text("ПРОДОЛЖИТЬ ОБХОД", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
 
-                // 2. 🔥 НОВАЯ КНОПКА «ПОСМОТРЕТЬ МОИ ОБХОДЫ»
+                // 2. КНОПКА «ПОСМОТРЕТЬ МОИ ОБХОДЫ»
                 Button(
                     onClick = { showLogsDialog = true },
                     modifier = Modifier
@@ -136,10 +164,17 @@ fun OhrannikShiftControlScreen(
                 // 3. Кнопка СТОП (Завершить смену)
                 OutlinedButton(
                     onClick = {
-                        prefsManager.generateExcelReport(employeeName)
+                        // Шаг 1: Железно фиксируем дату и время закрытия смены в SharedPreferences
                         prefsManager.closeCurrentShift()
+
+                        // Шаг 2: Формируем Excel-отчет
+                        prefsManager.generateExcelReport(employeeName)
+
+                        // Шаг 3: Гасим статус активности на самом экране для Compose
                         isShiftActive = false
-                        onShiftClosedSuccess()
+
+                        // Шаг 4: Включаем окно прощания (уход в "привет" произойдет при нажатии на ОК в диалоге)
+                        showGoodbyeDialog = true
                     },
                     modifier = Modifier.fillMaxWidth().height(50.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
@@ -149,15 +184,22 @@ fun OhrannikShiftControlScreen(
                 }
 
             } else {
-                // ЕСЛИ СМЕНА ЕЩЕ НЕ НАЧАТА
-                Text(text = "СТАТУС: СМЕНА ЗАКРЫТА", fontSize = 16.sp, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 48.dp))
+                // === ЭТОТ БЛОК ПОКАЗЫВАЕТСЯ, ТОЛЬКО ЕСЛИ СМЕНА ЗАКРЫТА ===
+                Text(
+                    text = "СТАТУС: СМЕНА ЗАКРЫТА",
+                    fontSize = 16.sp,
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 48.dp)
+                )
 
-                // КНОПКА СТАРТ
+                // 4. КНОПКА СТАРТ (Перенесена сюда, в блок else)
                 Button(
                     onClick = {
-                        val currentTime = dateTimeFormat.format(Date())
-                        prefsManager.startNewShift(employeeName, currentTime)
+                        // Меняем состояние экрана
                         isShiftActive = true
+
+                        // Вызываем коллбэк из MainActivity, который запишет старт смены на диск
                         onStartShiftSuccess()
                     },
                     modifier = Modifier.fillMaxWidth().height(64.dp),
@@ -166,6 +208,7 @@ fun OhrannikShiftControlScreen(
                     Text("НАЧАТЬ СМЕНУ (СТАРТ)", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
             }
+
         }
     }
 }
