@@ -33,6 +33,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.Executors
+import android.content.Context
+import android.os.Build
+import android.net.Uri
+import androidx.core.content.FileProvider
+import java.io.File
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,33 +69,55 @@ fun OhrannikCabinetScreen(
 
     var showQuestionDialog by remember { mutableStateOf<QrResult.QuestionFormat?>(null) }
     var showInputDialog by remember { mutableStateOf<QrResult.InputFormat?>(null) }
-    var showPhotoDialog by remember { mutableStateOf<QrResult.PhotoFormat?>(null) }
     var showErrorDialog by remember { mutableStateOf<String?>(null) }
     var inputTextValue by remember { mutableStateOf("") } // Текст внутри поля ввода показаний
-
-    // Флаг для переключения камеры: сканирование или фото
-    var isPhotoMode by remember { mutableStateOf(false) }
+    
+    // Для съемки фото
+    var photoCheckpointName by remember { mutableStateOf("") }
+    
+    // Создаем launcher один раз для использования в LaunchedEffect
+    val photoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+        onResult = { success ->
+            if (success && photoCheckpointName.isNotEmpty()) {
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                val fileName = "${photoCheckpointName.replace(" ", "_")}_${timestamp}.jpg"
+                val logText = "Фото прибора: $photoCheckpointName -> Файл: $fileName"
+                manager.saveScanResult(employeeName = employeeName, qrContent = logText)
+            }
+        }
+    )
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { granted -> hasCameraPermission = granted }
     )
+    
+    // Запуск камеры при изменении photoCheckpointName
+    LaunchedEffect(photoCheckpointName) {
+        if (photoCheckpointName.isNotEmpty()) {
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val fileName = "${photoCheckpointName.replace(" ", "_")}_${timestamp}.jpg"
+            
+            val filesDir = context.filesDir
+            val imageFile = File(filesDir, fileName)
+            
+            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                FileProvider.getUriForFile(context, context.packageName + ".fileprovider", imageFile)
+            } else {
+                Uri.fromFile(imageFile)
+            }
+            
+            photoLauncher.launch(uri)
+            
+            // Очищаем после использования
+            photoCheckpointName = ""
+        }
+    }
 
     LaunchedEffect(key1 = true) {
         if (!hasCameraPermission) {
             launcher.launch(Manifest.permission.CAMERA)
-        }
-    }
-
-    // Переключение режима камеры при открытии/закрытии диалога фото
-    LaunchedEffect(showPhotoDialog) {
-        if (showPhotoDialog != null) {
-            // Открываем диалог фото — переключаем в режим фото
-            isPhotoMode = true
-            isScanRequested = false // Останавливаем сканирование
-        } else {
-            // Закрываем диалог фото — возвращаем сканирование
-            isPhotoMode = false
         }
     }
     Scaffold(
@@ -142,118 +169,110 @@ fun OhrannikCabinetScreen(
                                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                     .build()
 
+                                val options = com.google.mlkit.vision.barcode.BarcodeScannerOptions.Builder()
+                                    .setBarcodeFormats(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE)
+                                    .build()
+                                val scanner = com.google.mlkit.vision.barcode.BarcodeScanning.getClient(options)
+
+                                imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
+                                    if (isScanRequested) {
+                                        @Suppress("UnsafeOptInUsageError")
+                                        val mediaImage = imageProxy.image
+                                        if (mediaImage != null) {
+                                            val rotation = imageProxy.imageInfo.rotationDegrees
+                                            val image = com.google.mlkit.vision.common.InputImage.fromMediaImage(mediaImage, rotation)
+
+                                            // Получаем физические размеры кадра матрицы камеры
+                                            val imgWidth = imageProxy.width
+                                            val imgHeight = imageProxy.height
+
+                                            scanner.process(image)
+                                                .addOnSuccessListener { barcodes ->
+                                                    for (barcode in barcodes) {
+                                                        val rawValue = barcode.rawValue
+                                                        val bounds = barcode.boundingBox
+
+                                                        if (rawValue != null && bounds != null) {
+
+                                                            // 1. Вычисляем координаты центра QR-кода на матрице
+                                                            val qrCenterX = bounds.centerX().toFloat()
+                                                            val qrCenterY = bounds.centerY().toFloat()
+
+                                                            // 2. Определяем границы рамки прицела (центральные 30% от кадра)
+                                                            // Если камера повернута вертикально (90 или 270 град), меняем оси местами для корректности
+                                                            val isRotated = rotation == 90 || rotation == 270
+                                                            val frameWidth = if (isRotated) imgHeight else imgWidth
+                                                            val frameHeight = if (isRotated) imgWidth else imgHeight
+
+                                                            // Рассчитываем допустимый квадрат по центру кадра
+                                                            val minX = frameWidth * 0.35f
+                                                            val maxX = frameWidth * 0.65f
+                                                            val minY = frameHeight * 0.35f
+                                                            val maxY = frameHeight * 0.65f
+
+                                                            // 3. Проверка: попадает ли центр QR-кода в рассчитанную центральную область
+                                                            if (qrCenterX in minX..maxX && qrCenterY in minY..maxY) {
+
+                                                                // ТОЛЬКО ЕСЛИ КОД ВНУТРИ ПРИЦЕЛА — выполняем ваш оригинальный код:
+                                                                isScanRequested = false
+
+                                                                // Отправляем строку на разбор парсеру QrHandler
+                                                                val qrResult = QrHandler.parseQrCode(barcode.rawValue ?: "", manager)
+
+
+                                                                // --- НОВЫЙ БЛОК ОБРАБОТКИ РЕЗУЛЬТАТА ---
+                                                                when (qrResult) {
+                                                                    is QrResult.CheckpointPassed -> {
+                                                                        // Ваша логика при успешном проходе точки
+                                                                        showCheckpointPassedDialog = qrResult
+                                                                    }
+                                                                    is QrResult.SequenceError -> {
+                                                                        // Логика при ошибке последовательности
+                                                                        android.widget.Toast.makeText(context, qrResult.message, android.widget.Toast.LENGTH_LONG).show()
+                                                                    }
+                                                                    is QrResult.QuestionFormat -> {
+                                                                        // Показать диалог с вопросом
+                                                                        showQuestionDialog = qrResult
+                                                                    }
+                                                                    is QrResult.InputFormat -> {
+                                                                        // Показать диалог для ввода данных
+                                                                        showInputDialog = qrResult
+                                                                    }
+                                                                    is QrResult.PhotoFormat -> {
+                                                                        // Запоминаем имя чекпоинта и запускаем камеру
+                                                                        photoCheckpointName = qrResult.title
+                                                                    }
+                                                                    is QrResult.ShiftReportTrigger -> {
+                                                                        onNavigateToReports()
+                                                                    }
+                                                                    is QrResult.Error -> {
+                                                                        showErrorDialog = qrResult.message
+                                                                    }
+                                                                }
+                                                                // -------------------------------------
+                                                                break // Прерываем цикл, так как нужный код найден и обработан
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                .addOnCompleteListener {
+                                                    // Обязательно закрываем imageProxy, чтобы камера не «застывала»
+                                                    imageProxy.close()
+                                                }
+                                        } else {
+                                            imageProxy.close()
+                                        }
+                                    } else {
+                                        imageProxy.close()
+                                    }
+                                }
+
+
                                 val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
                                 try {
                                     cameraProvider.unbindAll()
-                                    
-                                    // В режиме фото подключаем только preview, без imageAnalysis
-                                    if (!isPhotoMode) {
-                                        val options = com.google.mlkit.vision.barcode.BarcodeScannerOptions.Builder()
-                                            .setBarcodeFormats(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE)
-                                            .build()
-                                        val scanner = com.google.mlkit.vision.barcode.BarcodeScanning.getClient(options)
-
-                                        imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                                            if (isScanRequested) {
-                                                @Suppress("UnsafeOptInUsageError")
-                                                val mediaImage = imageProxy.image
-                                                if (mediaImage != null) {
-                                                    val rotation = imageProxy.imageInfo.rotationDegrees
-                                                    val image = com.google.mlkit.vision.common.InputImage.fromMediaImage(mediaImage, rotation)
-
-                                                    // Получаем физические размеры кадра матрицы камеры
-                                                    val imgWidth = imageProxy.width
-                                                    val imgHeight = imageProxy.height
-
-                                                    scanner.process(image)
-                                                        .addOnSuccessListener { barcodes ->
-                                                            for (barcode in barcodes) {
-                                                                val rawValue = barcode.rawValue
-                                                                val bounds = barcode.boundingBox
-
-                                                                if (rawValue != null && bounds != null) {
-
-                                                                    // 1. Вычисляем координаты центра QR-кода на матрице
-                                                                    val qrCenterX = bounds.centerX().toFloat()
-                                                                    val qrCenterY = bounds.centerY().toFloat()
-
-                                                                    // 2. Определяем границы рамки прицела (центральные 30% от кадра)
-                                                                    // Если камера повернута вертикально (90 или 270 град), меняем оси местами для корректности
-                                                                    val isRotated = rotation == 90 || rotation == 270
-                                                                    val frameWidth = if (isRotated) imgHeight else imgWidth
-                                                                    val frameHeight = if (isRotated) imgWidth else imgHeight
-
-                                                                    // Рассчитываем допустимый квадрат по центру кадра
-                                                                    val minX = frameWidth * 0.35f
-                                                                    val maxX = frameWidth * 0.65f
-                                                                    val minY = frameHeight * 0.35f
-                                                                    val maxY = frameHeight * 0.65f
-
-                                                                    // 3. Проверка: попадает ли центр QR-кода в рассчитанную центральную область
-                                                                    if (qrCenterX in minX..maxX && qrCenterY in minY..maxY) {
-
-                                                                        // ТОЛЬКО ЕСЛИ КОД ВНУТРИ ПРИЦЕЛА — выполняем ваш оригинальный код:
-                                                                        isScanRequested = false
-
-                                                                        // Отправляем строку на разбор парсеру QrHandler
-                                                                        val qrResult = QrHandler.parseQrCode(barcode.rawValue ?: "", manager)
-
-
-                                                                        // --- НОВЫЙ БЛОК ОБРАБОТКИ РЕЗУЛЬТАТА ---
-                                                                        when (qrResult) {
-                                                                            is QrResult.CheckpointPassed -> {
-                                                                                // Ваша логика при успешном проходе точки
-                                                                                showCheckpointPassedDialog = qrResult
-                                                                            }
-                                                                            is QrResult.SequenceError -> {
-                                                                                // Логика при ошибке последовательности
-                                                                                android.widget.Toast.makeText(context, qrResult.message, android.widget.Toast.LENGTH_LONG).show()
-                                                                            }
-                                                                            is QrResult.QuestionFormat -> {
-                                                                                // Показать диалог с вопросом
-                                                                                showQuestionDialog = qrResult
-                                                                            }
-                                                                            is QrResult.InputFormat -> {
-                                                                                // Показать диалог для ввода данных
-                                                                                showInputDialog = qrResult
-                                                                            }
-                                                                            is QrResult.PhotoFormat -> {
-                                                                                // Показать диалог для съемки фото
-                                                                                isPhotoMode = true // Переключаем камеру в режим фото
-                                                                                showPhotoDialog = qrResult
-                                                                            }
-                                                                            is QrResult.ShiftReportTrigger -> {
-                                                                                onNavigateToReports()
-                                                                            }
-                                                                            is QrResult.Error -> {
-                                                                                showErrorDialog = qrResult.message
-                                                                            }
-                                                                        }
-                                                                        // -------------------------------------
-                                                                        break // Прерываем цикл, так как нужный код найден и обработан
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        .addOnCompleteListener {
-                                                            // Обязательно закрываем imageProxy, чтобы камера не «застывала»
-                                                            imageProxy.close()
-                                                        }
-                                                } else {
-                                                    imageProxy.close()
-                                                }
-                                            } else {
-                                                imageProxy.close()
-                                            }
-                                        }
-
-                                        cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageAnalysis)
-                                    } else {
-                                        cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
-                                    }
-                                } catch (e: Exception) { 
-                                    e.printStackTrace() 
-                                }
+                                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageAnalysis)
+                                } catch (e: Exception) { e.printStackTrace() }
                             }, ContextCompat.getMainExecutor(ctx))
                             previewView
                         },
@@ -380,21 +399,7 @@ fun OhrannikCabinetScreen(
         )
     }
 
-    // 4. Диалог для ФОТО (съемка прибора)
-    showPhotoDialog?.let { result ->
-        PhotoCaptureDialog(
-            checkpointName = result.title,
-            onPhotoTaken = { photoPath ->
-                // Сохраняем путь к фото и метки в SharedPreferences
-                val logText = "Фото прибора: ${result.title} -> Файл: $photoPath"
-                manager.saveScanResult(employeeName = employeeName, qrContent = logText)
-                showPhotoDialog = null
-            },
-            onDismiss = { showPhotoDialog = null }
-        )
-    }
-
-    // 5. Диалог ошибки парсинга/сканирования
+    // 4. Диалог ошибки парсинга/сканирования
     showErrorDialog?.let { message ->
         AlertDialog(
             onDismissRequest = { showErrorDialog = null },
@@ -403,74 +408,6 @@ fun OhrannikCabinetScreen(
             confirmButton = { Button(onClick = { showErrorDialog = null }) { Text("ОК") } }
         )
     }
-}
-
-// Диалог для съемки фото прибора
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PhotoCaptureDialog(
-    checkpointName: String,
-    onPhotoTaken: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-
-    // Логер для отладки
-    LaunchedEffect(Unit) {
-        android.widget.Toast.makeText(context, "Фото прибора: $checkpointName", android.widget.Toast.LENGTH_SHORT).show()
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Съемка прибора") },
-        text = {
-            Column {
-                Text("Чекпоинт: $checkpointName")
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Сделайте фото прибора и нажмите Сохранить", color = MaterialTheme.colorScheme.primary)
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                // Камера через CameraX
-                AndroidView(
-                    factory = { ctx ->
-                        val previewView = PreviewView(ctx)
-                        val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-
-                        cameraProviderFuture.addListener({
-                            val cameraProvider = cameraProviderFuture.get()
-                            val preview = Preview.Builder().build().also {
-                                it.setSurfaceProvider(previewView.surfaceProvider)
-                            }
-
-                            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-                            try {
-                                cameraProvider.unbindAll()
-                                cameraProvider.bindToLifecycle(ctx as androidx.lifecycle.LifecycleOwner, cameraSelector, preview)
-                            } catch (e: Exception) { 
-                                e.printStackTrace()
-                            }
-                        }, ContextCompat.getMainExecutor(ctx))
-                        previewView
-                    },
-                    modifier = Modifier.fillMaxWidth().height(200.dp)
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    // Генерируем имя файла с именем чекпоинта и временем
-                    val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                    val fileName = "${checkpointName.replace(" ", "_")}_${timestamp}.jpg"
-                    
-                    onPhotoTaken(fileName)
-                }
-            ) { Text("Сохранить") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
-        }
-    )
 }
 
 // Вспомогательная заглушка, чтобы не ломать вызовы в других частях проекта
