@@ -24,6 +24,17 @@ class SharedPrefsManager(private val context: Context) {
         prefs.edit().putBoolean("strict_sequence_enabled", enabled).apply()
     }
 
+    // Сохраняет, был ли контроль последовательности включён в этой смене
+    fun saveSequenceControlStatus(isEnabled: Boolean) {
+        prefs.edit().putBoolean("sequence_control_was_enabled", isEnabled).apply()
+    }
+
+    // Получает статус контроля последовательности для отчета
+    fun getSequenceControlStatus(): String {
+        val wasEnabled = prefs.getBoolean("sequence_control_was_enabled", false)
+        return if (wasEnabled) "Контроль последовательности: ВКЛ" else "Контроль последовательности: ВЫКЛ"
+    }
+
     // Сохранить текущий рабочий маршрут (список названий точек через запятую)
     fun saveCurrentRouteCheckpoints(points: List<String>) {
         prefs.edit().putString("active_route_points", points.joinToString(",")).apply()
@@ -53,12 +64,14 @@ class SharedPrefsManager(private val context: Context) {
     }
 
     // Начать новую смену (сохраняем имя и время старта)
-    fun startNewShift(employeeName: String) {
+    fun startNewShift(employeeName: String, strictSequenceEnabled: Boolean) {
         val currentTime = dateFormat.format(Date()) // Генерирует строку вида "27.06.2026 15:30:00"
         prefs.edit().apply {
             putString("active_shift_employee", employeeName)
             putString("active_shift_start_time", currentTime)
             putBoolean("active_shift_is_running", true)
+            // Сохраняем статус контроля последовательности при старте смены
+            putBoolean("sequence_control_was_enabled", strictSequenceEnabled)
             apply()
         }
     }
@@ -223,6 +236,10 @@ class SharedPrefsManager(private val context: Context) {
 
                 // Заголовки столбцов
                 writer.write("Сотрудник;Дата и Время;Данные QR-кода\n")
+
+                // Запись статуса контроля последовательности
+                val sequenceControlStatus = getSequenceControlStatus()
+                writer.write("; $sequenceControlStatus\n")
 
                 // Запись накопленных данных
                 for (log in logs) {

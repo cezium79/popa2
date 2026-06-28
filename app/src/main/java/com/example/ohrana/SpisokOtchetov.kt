@@ -26,7 +26,9 @@ import java.io.File
 @Composable
 
 fun SpisokOtchetovScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onBackToAdmin: () -> Unit,
+    previousScreenWasAdmin: Boolean
 ) {
     val context = LocalContext.current
     val prefsManager = remember { SharedPrefsManager(context) }
@@ -39,7 +41,13 @@ fun SpisokOtchetovScreen(
             TopAppBar(
                 title = { Text("Архив отчетов (Excel/CSV)") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        if (previousScreenWasAdmin) {
+                            onBackToAdmin()
+                        } else {
+                            onBack()
+                        }
+                    }) {
                         Icon(arrowBackIcon, contentDescription = "Назад")
                     }
                 }

@@ -167,7 +167,7 @@ fun AppNavigation() {
             employeeName = selectedEmployeeName,
             selectedEmployeeName = selectedEmployeeName,
             onStartShiftSuccess = {
-                prefsManager.startNewShift(selectedEmployeeName)
+                prefsManager.startNewShift(selectedEmployeeName, prefsManager.isStrictSequenceEnabled())
                 currentScreen = "ohrannik_cabinet"
             },
             onContinueShift = {
@@ -207,11 +207,10 @@ fun AppNavigation() {
         // ТО ЧЕГО НЕ ХВАТАЛО: Экран Администратора
         "admin" -> AdministratorScreen(
             onNavigateToEmployeeList = { currentScreen = "employee_list" },
-            onNavigateToSpisokOtchetov = {
+            onNavigateToArchive = {
                 previousScreenWasAdmin = true
                 currentScreen = "spisok_otchetov"
             },
-            onNavigateToArchive = { currentScreen = "spisok_otchetov" },
             onNavigateToRoutes = { currentScreen = "routes" }, // <-- ДОБАВЛЕНО
             onBack = { currentScreen = "privet" }
         )
@@ -251,8 +250,11 @@ fun AppNavigation() {
         "spisok_otchetov" -> SpisokOtchetovScreen(
             onBack = {
                 currentScreen = "privet"
-
-            }
+            },
+            onBackToAdmin = {
+                currentScreen = "admin"
+            },
+            previousScreenWasAdmin = previousScreenWasAdmin
         )
 
 

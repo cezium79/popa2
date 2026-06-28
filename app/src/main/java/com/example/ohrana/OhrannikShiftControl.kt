@@ -164,10 +164,13 @@ fun OhrannikShiftControlScreen(
                 // 3. Кнопка СТОП (Завершить смену)
                 OutlinedButton(
                     onClick = {
-                        // Шаг 1: Железно фиксируем дату и время закрытия смены в SharedPreferences
+                        // Шаг 1: Сохраняем статус контроля последовательности для отчета
+                        prefsManager.saveSequenceControlStatus(prefsManager.isStrictSequenceEnabled())
+
+                        // Шаг 2: Железно фиксируем дату и время закрытия смены в SharedPreferences
                         prefsManager.closeCurrentShift()
 
-                        // Шаг 2: Формируем Excel-отчет
+                        // Шаг 3: Формируем Excel-отчет
                         prefsManager.generateExcelReport(employeeName)
 
                         // Шаг 3: Гасим статус активности на самом экране для Compose

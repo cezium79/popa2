@@ -11,6 +11,7 @@ sealed class QrResult {
     data class SequenceError(val expectedCheckpointId: String?, val message: String) : QrResult()
     data class QuestionFormat(val text: String, val answers: List<String>) : QrResult()
     data class InputFormat(val title: String) : QrResult()
+    data class PhotoFormat(val title: String) : QrResult()
     object ShiftReportTrigger : QrResult()
     data class Error(val message: String) : QrResult()
 }
@@ -31,22 +32,24 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
 
     /**
      * Проверяет ID чекпоинта и, если он верный, продвигает обход к следующей точке.
+     * Возвращает Pair(валидность, следующий ожидаемый ID или null если маршрут завершен)
      */
     fun validateAndAdvance(checkpointId: String): Pair<Boolean, String?> {
-        // Сначала проверяем, совпадает ли отсканированный ID с тем, который мы ждем сейчас.
+        // Проверяем, совпадает ли отсканированный ID с ожидаемым
         if (currentIndex < checkpoints.size && checkpoints[currentIndex] == checkpointId) {
-            // Если ДА, то продвигаем индекс к СЛЕДУЮЩЕЙ точке.
             currentIndex++
 
-            // Теперь определяем, какой ID будет следующим (чтобы показать пользователю подсказку)
-            val nextExpectedId = if (currentIndex < checkpoints.size) {
-                checkpoints[currentIndex]
-            } else {
-                null // Обход завершен, следующих точек нет
+            // Если достигли конца маршрута, возвращаем success с null (маршрут завершен)
+            if (currentIndex >= checkpoints.size) {
+                return Pair(true, null)
             }
+
+            // Возвращаем следующий ожидаемый ID
+            val nextExpectedId = checkpoints[currentIndex]
             return Pair(true, nextExpectedId)
+
         } else {
-            // Если НЕТ, возвращаем тот ID, который ожидался изначально
+            // В случае ошибки возвращаем тот ID, который ожидался
             val expectedId =
                 if (currentIndex < checkpoints.size) checkpoints[currentIndex] else null
             return Pair(false, expectedId)
@@ -128,28 +131,50 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
                   json.has("type") && json.getString("type") == "checkpoint" &&
                           json.has("action") && json.getString("action") == "question" -> {
 
-                      // Сначала обрабатываем как обычный чекпоинт (проверяем последовательность)
                       val checkpointId = json.optString("id", "")
                       val name = json.getString("name")
                       val currentTime = dateFormat.format(Date())
 
-                      val activeRoute = activeRounds[DEFAULT_ROUND_KEY]
-                      if (activeRoute != null) {
-                          val (isValid, expectedId) = activeRoute.validateAndAdvance(checkpointId)
-                          if (!isValid) {
-                              return QrResult.SequenceError(
-                                  expectedId ?: "",
-                                  "Нарушена последовательность обхода."
-                              )
-                          }
-                      } else {
-                          startNewRound(DEFAULT_ROUND_KEY, defaultCheckpointIds)
+                      // Сохраняем статус контроля последовательности при первом сканировании
+                      prefsManager.saveSequenceControlStatus(prefsManager.isStrictSequenceEnabled())
+
+                      // НЕСТРОГИЙ РЕЖИМ: просто сохраняем факт прохода, без проверки последовательности
+                      if (!prefsManager.isStrictSequenceEnabled()) {
+                          saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime, prefsManager)
+                          // Извлекаем данные вопроса и возвращаем результат
+                          val questionText = json.getString("text")
+                          val answersArray = json.getJSONArray("answers")
+                          val answersList = List(answersArray.length()) { answersArray.getString(it) }
+                          return QrResult.QuestionFormat(questionText, answersList)
                       }
 
-                      // Если проверка последовательности пройдена, сохраняем факт прохода точки
-                      saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime)
+                      // СТРОГИЙ РЕЖИМ: проверяем последовательность
+                      val activeRoute = activeRounds[DEFAULT_ROUND_KEY]
+                      
+                      // Если маршрута нет - создаем и сразу проверяем первую точку
+                      val (isValid, expectedId) = if (activeRoute == null) {
+                          startNewRound(DEFAULT_ROUND_KEY, defaultCheckpointIds)
+                          activeRounds[DEFAULT_ROUND_KEY]!!.validateAndAdvance(checkpointId)
+                      } else {
+                          activeRoute.validateAndAdvance(checkpointId)
+                      }
+                      
+                      if (!isValid) {
+                          return QrResult.SequenceError(
+                              expectedId ?: "",
+                              "Нарушена последовательность обхода."
+                          )
+                      }
 
-                      // Затем извлекаем данные вопроса и возвращаем их результат
+                      // Если проверка пройдена, сохраняем факт
+                      saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime, prefsManager)
+
+                      // Если маршрут завершен, сбрасываем его
+                      if (expectedId == null) {
+                          endRoundIfActive()
+                      }
+
+                      // Извлекаем данные вопроса и возвращаем результат
                       val questionText = json.getString("text")
                       val answersArray = json.getJSONArray("answers")
                       val answersList = List(answersArray.length()) { answersArray.getString(it) }
@@ -157,44 +182,100 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
                       QrResult.QuestionFormat(questionText, answersList)
                   }
 
+                  // БЛОК 1.5: КОД СОДЕРЖИТ И ЧЕКПОИНТ, И ВВОД ДАННЫХ
+                  json.has("type") && json.getString("type") == "checkpoint" &&
+                          json.has("action") && json.getString("action") == "input" -> {
+
+                      val checkpointId = json.optString("id", "")
+                      val name = json.getString("name")
+                      val currentTime = dateFormat.format(Date())
+                      val title = json.optString("text", "Показания")
+
+                      // Сохраняем статус контроля последовательности при первом сканировании
+                      prefsManager.saveSequenceControlStatus(prefsManager.isStrictSequenceEnabled())
+
+                      // НЕСТРОГИЙ РЕЖИМ: просто сохраняем факт прохода, без проверки последовательности
+                      if (!prefsManager.isStrictSequenceEnabled()) {
+                          saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime, prefsManager)
+                          return QrResult.InputFormat(title)
+                      }
+
+                      // СТРОГИЙ РЕЖИМ: проверяем последовательность
+                      val activeRoute = activeRounds[DEFAULT_ROUND_KEY]
+                      
+                      // Если маршрута нет - создаем и сразу проверяем первую точку
+                      val (isValid, expectedId) = if (activeRoute == null) {
+                          startNewRound(DEFAULT_ROUND_KEY, defaultCheckpointIds)
+                          activeRounds[DEFAULT_ROUND_KEY]!!.validateAndAdvance(checkpointId)
+                      } else {
+                          activeRoute.validateAndAdvance(checkpointId)
+                      }
+                      
+                      if (!isValid) {
+                          return QrResult.SequenceError(
+                              expectedId ?: "",
+                              "Нарушена последовательность обхода."
+                          )
+                      }
+
+                      // Если проверка пройдена, сохраняем факт
+                      saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime, prefsManager)
+
+                      // Если маршрут завершен, сбрасываем его
+                      if (expectedId == null) {
+                          endRoundIfActive()
+                      }
+
+                      return QrResult.InputFormat(title)
+                  }
+
                   // БЛОК 2: ОБЫЧНЫЙ ЧЕКПОИНТ (без доп. действий)
                   json.has("type") && json.getString("type") == "checkpoint" -> {
                       val checkpointId = json.optString("id", "")
                       val name = json.getString("name")
                       val currentTime = dateFormat.format(Date())
-                      val activeRoute = activeRounds[DEFAULT_ROUND_KEY]
 
+                      // Сохраняем статус контроля последовательности при первом сканировании
+                      prefsManager.saveSequenceControlStatus(prefsManager.isStrictSequenceEnabled())
+
+                      // НЕСТРОГИЙ РЕЖИМ: просто сохраняем факт прохода, без проверки последовательности
                       if (!prefsManager.isStrictSequenceEnabled()) {
-                          saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime)
+                          saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime, prefsManager)
+                          return QrResult.CheckpointPassed(checkpointId, name, currentTime)
+                      }
+
+                      // СТРОГИЙ РЕЖИМ: проверяем последовательность
+                      val activeRoute = activeRounds[DEFAULT_ROUND_KEY]
+                      
+                      // Если маршрута нет - создаем и сразу проверяем первую точку
+                      val (isValid, expectedId) = if (activeRoute == null) {
+                          startNewRound(DEFAULT_ROUND_KEY, defaultCheckpointIds)
+                          activeRounds[DEFAULT_ROUND_KEY]!!.validateAndAdvance(checkpointId)
+                      } else {
+                          activeRoute.validateAndAdvance(checkpointId)
+                      }
+                      
+                      if (isValid) {
+                          saveCheckpointToLog(
+                              DEFAULT_ROUND_KEY,
+                              checkpointId,
+                              name,
+                              currentTime,
+                              prefsManager
+                          )
+                          
+                          // Если маршрут завершен, сбрасываем его
+                          if (expectedId == null) {
+                              endRoundIfActive()
+                          }
+                          
                           QrResult.CheckpointPassed(checkpointId, name, currentTime)
                       } else {
-                          // Старая логика проверки последовательности
-                          val activeRoute = activeRounds[DEFAULT_ROUND_KEY]
-                          // ... (логика с validateAndAdvance)
+                          QrResult.SequenceError(
+                              expectedId ?: "",
+                              "Нарушена последовательность обхода."
+                          )
                       }
-
-                      if (activeRoute != null) {
-                          val (isValid, expectedId) = activeRoute.validateAndAdvance(checkpointId)
-                          if (isValid) {
-                              saveCheckpointToLog(
-                                  DEFAULT_ROUND_KEY,
-                                  checkpointId,
-                                  name,
-                                  currentTime
-                              )
-                              QrResult.CheckpointPassed(checkpointId, name, currentTime)
-                          } else {
-                              QrResult.SequenceError(
-                                  expectedId ?: "",
-                                  "Нарушена последовательность обхода."
-                              )
-                          }
-                      } else {
-                          startNewRound(DEFAULT_ROUND_KEY, defaultCheckpointIds)
-                          // ИСПРАВЛЕНО: Передаем prefsManager дальше в рекурсивный вызов
-                          return parseQrCode(rawText, prefsManager)
-                      }
-
                   }
 
                   // БЛОК 3: ПРОСТОЙ ВОПРОС
@@ -203,13 +284,57 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
                       val answersList = List(json.getJSONArray("answers").length()) { i ->
                           json.getJSONArray("answers").getString(i)
                       }
-                      QrResult.QuestionFormat(text, answersList)
+                      return QrResult.QuestionFormat(text, answersList)
                   }
 
-                  // БЛОК 4: ВВОД ДАННЫХ
+                  // БЛОК 4: ВВОД ДАННЫХ (если type: "input" без type: "checkpoint")
                   json.has("type") && json.getString("type") == "input" -> {
-                      val title = json.getString("title")
-                      QrResult.InputFormat(title)
+                      val title = json.optString("title", "Показания")
+                      return QrResult.InputFormat(title)
+                  }
+
+                  // БЛОК 5: ФОТОПРИЕМНИК (если action: "photo")
+                  json.has("action") && json.getString("action") == "photo" -> {
+                      val checkpointId = json.optString("id", "")
+                      val name = json.getString("name")
+                      val currentTime = dateFormat.format(Date())
+
+                      // Сохраняем статус контроля последовательности при первом сканировании
+                      prefsManager.saveSequenceControlStatus(prefsManager.isStrictSequenceEnabled())
+
+                      // НЕСТРОГИЙ РЕЖИМ: просто сохраняем факт прохода, без проверки последовательности
+                      if (!prefsManager.isStrictSequenceEnabled()) {
+                          saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime, prefsManager)
+                          return QrResult.PhotoFormat(name)
+                      }
+
+                      // СТРОГИЙ РЕЖИМ: проверяем последовательность
+                      val activeRoute = activeRounds[DEFAULT_ROUND_KEY]
+                      
+                      // Если маршрута нет - создаем и сразу проверяем первую точку
+                      val (isValid, expectedId) = if (activeRoute == null) {
+                          startNewRound(DEFAULT_ROUND_KEY, defaultCheckpointIds)
+                          activeRounds[DEFAULT_ROUND_KEY]!!.validateAndAdvance(checkpointId)
+                      } else {
+                          activeRoute.validateAndAdvance(checkpointId)
+                      }
+                      
+                      if (!isValid) {
+                          return QrResult.SequenceError(
+                              expectedId ?: "",
+                              "Нарушена последовательность обхода."
+                          )
+                      }
+
+                      // Если проверка пройдена, сохраняем факт
+                      saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime, prefsManager)
+
+                      // Если маршрут завершен, сбрасываем его
+                      if (expectedId == null) {
+                          endRoundIfActive()
+                      }
+
+                      return QrResult.PhotoFormat(name)
                   }
 
                   // ФИНАЛЬНЫЙ ELSE для любых других случаев
@@ -230,7 +355,8 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
           routeName: String,
           id: String,
           name: String,
-          timestamp: String
+          timestamp: String,
+          prefsManager: SharedPrefsManager
       ) {
           shiftLogs.add(
               CheckpointEntry(
@@ -240,6 +366,10 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
                   timestamp = timestamp
               )
           )
+          
+          // Сохраняем лог в SharedPreferences для Excel-отчета
+          val logText = "Чекпоинт: $name (ID: $id)"
+          prefsManager.saveScanResult("Маршрут", logText)
       }
 
       fun generateFullReport(): String {

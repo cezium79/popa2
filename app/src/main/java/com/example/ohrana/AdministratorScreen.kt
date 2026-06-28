@@ -20,7 +20,6 @@ import androidx.compose.runtime.remember
 fun AdministratorScreen(
     onNavigateToEmployeeList: () -> Unit,
     onNavigateToArchive: () -> Unit, // Новый обработчик для перехода в архив
-    onNavigateToSpisokOtchetov: () -> Unit,
     onNavigateToRoutes: () -> Unit,
     onBack: () -> Unit
 ) {
