@@ -292,5 +292,46 @@ class SharedPrefsManager(private val context: Context) {
             }
         }.sortedBy { it.id }
     }
+
+    // ==================================================
+    // 🖼️ МЕТОДЫ ДЛЯ РАБОТЫ С КАРТИНКАМИ ПРИБОРОВ
+    // ==================================================
+
+    /**
+     * Сохраняет URI картинки прибора для чекпоинта по его ID
+     * Формат ключа: checkpoint_image_uri_<id>
+     */
+    fun saveCheckpointImageUri(checkpointId: String, uri: String) {
+        val localPrefs = context.getSharedPreferences("OhranaPrefs", Context.MODE_PRIVATE)
+        localPrefs.edit().putString("checkpoint_image_uri_$checkpointId", uri).apply()
+    }
+
+    /**
+     * Получает URI картинки прибора для чекпоинта по его ID
+     */
+    fun getCheckpointImageUri(checkpointId: String): String? {
+        val localPrefs = context.getSharedPreferences("OhranaPrefs", Context.MODE_PRIVATE)
+        return localPrefs.getString("checkpoint_image_uri_$checkpointId", null)
+    }
+
+    /**
+     * Удаляет сохраненную картинку прибора по ID чекпоинта
+     */
+    fun clearCheckpointImageUri(checkpointId: String) {
+        val localPrefs = context.getSharedPreferences("OhranaPrefs", Context.MODE_PRIVATE)
+        localPrefs.edit().remove("checkpoint_image_uri_$checkpointId").apply()
+    }
+
+    /**
+     * Получает все сохраненные URI картинок приборов
+     * Возвращает Map<checkpointId, uri>
+     */
+    fun getAllCheckpointImageUris(): Map<String, String> {
+        val localPrefs = context.getSharedPreferences("OhranaPrefs", Context.MODE_PRIVATE)
+        val all = localPrefs.all
+        return all.filterKeys { it.startsWith("checkpoint_image_uri_") }
+            .mapKeys { it.key.removePrefix("checkpoint_image_uri_") }
+            .mapValues { it.value as String }
+    }
 }
 

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="GigaCodeAgentSettings">
+    <option name="autoApprovedCommands">
+      <list>
+        <Execute>
+          <option name="pattern" value="cd H:/AndroidProjects/Ohrana-c7953c45 ; ./gradlew assembleDebug 2&gt;&amp;1 | Select-String -Pattern &quot;BUILD|ERROR|warning|FAILED&quot; | Select-Object -Last 20" />
+        </Execute>
+      </list>
+    </option>
+  </component>
+</project>

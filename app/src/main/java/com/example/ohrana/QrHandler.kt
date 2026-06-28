@@ -11,7 +11,7 @@ sealed class QrResult {
     data class SequenceError(val expectedCheckpointId: String?, val message: String) : QrResult()
     data class QuestionFormat(val text: String, val answers: List<String>) : QrResult()
     data class InputFormat(val title: String) : QrResult()
-    data class PhotoFormat(val title: String) : QrResult()
+    data class PhotoFormat(val title: String, val checkpointId: String, val imageUri: String? = null) : QrResult()
     object ShiftReportTrigger : QrResult()
     data class Error(val message: String) : QrResult()
 }
@@ -236,13 +236,16 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
                       val name = json.getString("name")
                       val currentTime = dateFormat.format(Date())
 
+                      // Получаем URI картинки прибора из SharedPreferences по ID чекпоинта
+                      val deviceImageUri = prefsManager.getCheckpointImageUri(checkpointId)
+
                       // Сохраняем статус контроля последовательности при первом сканировании
                       prefsManager.saveSequenceControlStatus(prefsManager.isStrictSequenceEnabled())
 
                       // НЕСТРОГИЙ РЕЖИМ: просто сохраняем факт прохода, без проверки последовательности
                       if (!prefsManager.isStrictSequenceEnabled()) {
                           saveCheckpointToLog(DEFAULT_ROUND_KEY, checkpointId, name, currentTime, prefsManager)
-                          return QrResult.PhotoFormat(name)
+                          return QrResult.PhotoFormat(name, checkpointId, deviceImageUri)
                       }
 
                       // СТРОГИЙ РЕЖИМ: проверяем последовательность
@@ -271,7 +274,7 @@ private class PatrolRoute(val routeName: String, private val checkpoints: List<S
                           endRoundIfActive()
                       }
 
-                      return QrResult.PhotoFormat(name)
+                      return QrResult.PhotoFormat(name, checkpointId, deviceImageUri)
                   }
 
                   // БЛОК 2: ОБЫЧНЫЙ ЧЕКПОИНТ (без доп. действий) - проверяется ПОСЛЕ БЛОКА 5

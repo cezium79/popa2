@@ -5,27 +5,48 @@ import androidx.compose.runtime.mutableStateOf
 
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+
+// Модель свойств чекпоинта
+data class CheckpointProperties(
+    val id: String,
+    val imageUri: String? = null
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MarshrutiScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToCheckpointProperties: (List<String>) -> Unit
 ) {
     var maxRoundDurationMinutes by remember { mutableStateOf("30") }
     val context = LocalContext.current
@@ -35,6 +56,23 @@ fun MarshrutiScreen(
 
     // ⏰ Инициализируем менеджер системных будильников
     val alarmScheduler = remember { AlarmScheduler(context) }
+
+    // 📷 FilePicker для выбора картинки прибора
+    // Текущий выбранный чекпоинт для привязки картинки
+    var selectedCheckpointIdForImage by remember { mutableStateOf("") }
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+        onResult = { uri ->
+            uri?.let {
+                // Сохраняем URI для конкретного чекпоинта
+                sharedPrefsManager.saveCheckpointImageUri(selectedCheckpointIdForImage, uri.toString())
+                android.widget.Toast.makeText(context, "Картинка привязана к чекпоинту '$selectedCheckpointIdForImage'", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    )
+
+    // 1. Количество обходов
 
     // 1. Количество обходов (Явно указываем <Int>, чтобы компилятор не путался)
     var roundsCount by remember { mutableStateOf<Int>(3) }
@@ -233,6 +271,13 @@ fun MarshrutiScreen(
                         onClick = {
                             if (newPointInput.isNotBlank()) {
                                 checkpointList.add(newPointInput.trim())
+                                // Сохраняем список чекпоинтов в SharedPreferences
+                                sharedPrefsManager.saveRouteSettings(
+                                    roundsCount = roundsCount,
+                                    times = routeAlarms.map { it.time },
+                                    tolerance = timeToleranceMinutes,
+                                    checkpoints = checkpointList.toList()
+                                )
                                 newPointInput = ""
                             }
                         },
@@ -260,16 +305,71 @@ fun MarshrutiScreen(
                         modifier = Modifier.weight(1f)
                     )
 
-                    IconButton(
-                        onClick = { checkpointList.remove(checkpoint) },
-                        modifier = Modifier.size(32.dp)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Удалить",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(18.dp)
+                        // Кнопка привязки картинки к чекпоинту
+                        IconButton(
+                            onClick = {
+                                selectedCheckpointIdForImage = checkpoint
+                                imagePickerLauncher.launch("image/*")
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Привязать картинку",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                checkpointList.remove(checkpoint)
+                                // Сохраняем список чекпоинтов в SharedPreferences при удалении
+                                sharedPrefsManager.saveRouteSettings(
+                                    roundsCount = roundsCount,
+                                    times = routeAlarms.map { it.time },
+                                    tolerance = timeToleranceMinutes,
+                                    checkpoints = checkpointList.toList()
+                                )
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Удалить",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // --- РАЗДЕЛ 4: РЕДАКТИРОВАНИЕ СВОЙСТВ ЧЕКПОИНТОВ ---
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("4. Настройка свойств чекпоинтов", fontSize = 16.sp, style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Управление привязанными картинками для всех чекпоинтов",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = { onNavigateToCheckpointProperties(checkpointList) },
+                            modifier = Modifier.fillMaxWidth().height(50.dp)
+                        ) {
+                            Text("Редактировать свойства чекпоинтов")
+                        }
                     }
                 }
             }
@@ -295,4 +395,10 @@ fun MarshrutiScreen(
             }
         }
     }
+}
+
+@Composable
+@Preview(showBackground = true, name = "Marshruti Screen Preview")
+fun MarshrutiScreenPreview() {
+    MarshrutiScreen(onBack = {}, onNavigateToCheckpointProperties = {})
 }

@@ -38,6 +38,8 @@ import android.os.Build
 import android.net.Uri
 import androidx.core.content.FileProvider
 import java.io.File
+import android.graphics.BitmapFactory
+import android.provider.MediaStore
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,7 +47,8 @@ import java.io.File
 fun OhrannikCabinetScreen(
     employeeName: String,
     onLogout: () -> Unit,
-    onNavigateToReports: () -> Unit
+    onNavigateToReports: () -> Unit,
+    onNavigateToPhoto: (SharedPrefsManager, String) -> Unit
 ) {
     val context = LocalContext.current
     val manager = remember(context) { SharedPrefsManager(context) }
@@ -58,6 +61,12 @@ fun OhrannikCabinetScreen(
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    
+    var hasStoragePermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         )
     }
 
@@ -75,41 +84,21 @@ fun OhrannikCabinetScreen(
     // Для съемки фото
     var photoCheckpointName by remember { mutableStateOf("") }
     
-    // Создаем launcher один раз для использования в LaunchedEffect
-    val photoLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture(),
-        onResult = { success ->
-            if (success && photoCheckpointName.isNotEmpty()) {
-                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                val fileName = "${photoCheckpointName.replace(" ", "_")}_${timestamp}.jpg"
-                val logText = "Фото прибора: $photoCheckpointName -> Файл: $fileName"
-                manager.saveScanResult(employeeName = employeeName, qrContent = logText)
-            }
-        }
-    )
-
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { granted -> hasCameraPermission = granted }
     )
     
-    // Запуск камеры при изменении photoCheckpointName
+    val storageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { granted -> hasStoragePermission = granted }
+    )
+    
+    // Запуск экрана фото при изменении photoCheckpointName
     LaunchedEffect(photoCheckpointName) {
         if (photoCheckpointName.isNotEmpty()) {
-            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val fileName = "${photoCheckpointName.replace(" ", "_")}_${timestamp}.jpg"
-            
-            val filesDir = context.filesDir
-            val imageFile = File(filesDir, fileName)
-            
-            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                FileProvider.getUriForFile(context, context.packageName + ".fileprovider", imageFile)
-            } else {
-                Uri.fromFile(imageFile)
-            }
-            
-            photoLauncher.launch(uri)
-            
+            // Переход на экран фото с передачей manager и имени чекпоинта
+            onNavigateToPhoto(manager, photoCheckpointName)
             // Очищаем после использования
             photoCheckpointName = ""
         }
@@ -118,6 +107,9 @@ fun OhrannikCabinetScreen(
     LaunchedEffect(key1 = true) {
         if (!hasCameraPermission) {
             launcher.launch(Manifest.permission.CAMERA)
+        }
+        if (!hasStoragePermission) {
+            storageLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
     }
     Scaffold(
@@ -239,8 +231,8 @@ fun OhrannikCabinetScreen(
                                                                         showInputDialog = qrResult
                                                                     }
                                                                     is QrResult.PhotoFormat -> {
-                                                                        // Запоминаем имя чекпоинта и запускаем камеру
-                                                                        photoCheckpointName = qrResult.title
+                                                                        // Запоминаем ID чекпоинта и переходим на экран фото
+                                                                        photoCheckpointName = qrResult.checkpointId
                                                                     }
                                                                     is QrResult.ShiftReportTrigger -> {
                                                                         onNavigateToReports()

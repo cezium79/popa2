@@ -81,9 +81,13 @@ fun AppNavigation() {
     var previousScreenWasAdmin by remember { mutableStateOf(false) }
     var currentScreen by remember { mutableStateOf("privet") }
     var selectedEmployeeName by remember { mutableStateOf("") }
+    var selectedCheckpointName by remember { mutableStateOf("") }
 
     val context = LocalContext.current
     val prefsManager = remember { SharedPrefsManager(context) }
+
+    // Храним список чекпоинтов для навигации в CheckpointPropertiesScreen
+    var checkpointListForProps by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val employeeList = remember {
         val savedList = prefsManager.loadEmployees()
@@ -186,10 +190,6 @@ fun AppNavigation() {
             }
         )
 
-
-
-
-
         "ohrannik_cabinet" -> OhrannikCabinetScreen(
             // ИСПРАВЛЕНО: параметр внутри функции называется employeeName!
             employeeName = selectedEmployeeName,
@@ -199,8 +199,30 @@ fun AppNavigation() {
             onNavigateToReports = {
                 previousScreenWasAdmin = false
                 currentScreen = "spisok_otchetov"
+            },
+            onNavigateToPhoto = { manager, checkpointName ->
+                selectedCheckpointName = checkpointName
+                currentScreen = "photo_capture"
             }
         )
+
+        // Экран захвата фото
+        "photo_capture" -> PhotoCaptureScreen(
+            checkpointName = selectedCheckpointName,
+            onPhotoTaken = { fileName ->
+                // Сохраняем путь к фото в SharedPreferences
+                val logText = "Фото прибора: $selectedCheckpointName -> Файл: $fileName"
+                prefsManager.saveScanResult(employeeName = selectedEmployeeName, qrContent = logText)
+            },
+            onBack = {
+                // При возврате очищаем ID чекпоинта и возвращаемся в cabinet
+                selectedCheckpointName = ""
+                currentScreen = "ohrannik_cabinet"
+            },
+            prefsManager = prefsManager,
+            employeeName = selectedEmployeeName
+        )
+
 
 
         // ТО ЧЕГО НЕ ХВАТАЛО: Экран Администратора
@@ -216,7 +238,20 @@ fun AppNavigation() {
 
         // Экран управления маршрутами (Новый блок)
         "routes" -> MarshrutiScreen(
+            onNavigateToCheckpointProperties = { checkpoints -> 
+                checkpointListForProps = checkpoints
+                currentScreen = "checkpoint_properties" 
+            },
             onBack = { currentScreen = "admin" }
+        )
+
+        // Экран редактирования свойств чекпоинтов
+        "checkpoint_properties" -> CheckpointPropertiesScreen(
+            checkpointList = checkpointListForProps,
+            onBack = { currentScreen = "routes" },
+            onPropertiesChanged = { updatedProperties ->
+                // Обновляем свойства в памяти
+            }
         )
 
         // Дополнительный экран: Список охранников
