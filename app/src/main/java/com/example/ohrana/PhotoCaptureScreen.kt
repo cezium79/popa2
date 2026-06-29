@@ -55,7 +55,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PhotoCaptureScreen(
-    checkpointName: String,
+    checkpointId: String,
     onPhotoTaken: (String) -> Unit,
     onBack: () -> Unit,
     prefsManager: SharedPrefsManager,
@@ -64,12 +64,18 @@ fun PhotoCaptureScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Получаем URI картинки прибора из SharedPreferences по ID чекпоинта
-    // Используем LaunchedEffect для чтения URI, чтобы компонент реагировал на изменения
-    var deviceImageUri by remember { mutableStateOf(prefsManager.getCheckpointImageUri(checkpointName)) }
+    // Получаем URI картинки прибора
+    // Сначала пытаемся загрузить из данных чекпоинта, затем из SharedPreferences
+    val checkpointFromDatabase = prefsManager.getCheckpointById(checkpointId)
+    var deviceImageUri by remember { 
+        mutableStateOf(
+            checkpointFromDatabase?.imageUri ?: prefsManager.getCheckpointImageUri(checkpointId)
+        ) 
+    }
     
-    LaunchedEffect(prefsManager, checkpointName) {
-        deviceImageUri = prefsManager.getCheckpointImageUri(checkpointName)
+    LaunchedEffect(prefsManager, checkpointId) {
+        val checkpoint = prefsManager.getCheckpointById(checkpointId)
+        deviceImageUri = checkpoint?.imageUri ?: prefsManager.getCheckpointImageUri(checkpointId)
     }
 
     // Состояния: false = камера, true = предпросмотр
@@ -84,7 +90,7 @@ fun PhotoCaptureScreen(
     // Сначала сохраняем в приватную папку
     val filesDir = context.filesDir
     val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-    val fileName = "${checkpointName.replace(" ", "_")}_${timestamp}.jpg"
+    val fileName = "${checkpointId.replace(" ", "_")}_${timestamp}.jpg"
     val imageFile = File(filesDir, fileName)
     
     // Лог для диагностики
@@ -124,7 +130,7 @@ fun PhotoCaptureScreen(
                                 isPreviewMode = true
                                 
                                 // Сохраняем лог в SharedPreferences
-                                val logText = "Фото прибора: $checkpointName -> Файл: $fileName"
+                                val logText = "Фото прибора: $checkpointId -> Файл: $fileName"
                                 prefsManager.saveScanResult(employeeName = employeeName, qrContent = logText)
                             } else {
                                 android.widget.Toast.makeText(context, "Ошибка: не удалось декодировать bitmap!", android.widget.Toast.LENGTH_SHORT).show()
@@ -204,7 +210,7 @@ fun PhotoCaptureScreen(
     }
 
     LaunchedEffect(Unit) {
-        android.widget.Toast.makeText(context, "Съемка: $checkpointName", android.widget.Toast.LENGTH_SHORT).show()
+        android.widget.Toast.makeText(context, "Съемка: $checkpointId", android.widget.Toast.LENGTH_SHORT).show()
     }
 
     Scaffold(
@@ -214,7 +220,7 @@ fun PhotoCaptureScreen(
                     if (isPreviewMode) {
                         Text("Предпросмотр")
                     } else {
-                        Text("Съемка прибора: $checkpointName")
+                        Text("Съемка прибора: $checkpointId")
                     }
                 },
                 navigationIcon = {
@@ -322,7 +328,7 @@ fun PhotoCaptureScreen(
                                 modifier = Modifier.padding(16.dp)
                             )
                             Text(
-                                text = checkpointName,
+                                text = checkpointId,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = Color.White,
@@ -405,7 +411,8 @@ fun PhotoCaptureScreen(
                             onClick = {
                                 // Сохраняем фото и возвращаемся в cabinet
                                 // Сохраняем фото в галерею
-                                savePhotoToGallery(imageFile, checkpointName, context)
+                                val savedFileName = savePhotoToGallery(imageFile, checkpointId, context)
+                                savedFileName?.let { onPhotoTaken(it) }
                                 onBack()
                             },
                             modifier = Modifier.width(140.dp).height(56.dp),
@@ -421,17 +428,17 @@ fun PhotoCaptureScreen(
 }
 
 // Функция для сохранения фото в галерею
-fun savePhotoToGallery(sourceFile: File, checkpointName: String, context: Context) {
+fun savePhotoToGallery(sourceFile: File, checkpointId: String, context: Context): String? {
     try {
         android.widget.Toast.makeText(context, "Сохранение в галерею...", android.widget.Toast.LENGTH_SHORT).show()
         
         if (!sourceFile.exists()) {
             android.widget.Toast.makeText(context, "Исходный файл не найден!", android.widget.Toast.LENGTH_SHORT).show()
-            return
+            return null
         }
         
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val destFileName = "${checkpointName.replace(" ", "_")}_${timestamp}.jpg"
+        val destFileName = "${checkpointId.replace(" ", "_")}_${timestamp}.jpg"
         
         // Создаем папку в галерее
         val galleryDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
@@ -467,11 +474,15 @@ fun savePhotoToGallery(sourceFile: File, checkpointName: String, context: Contex
             // Удаляем временный файл из private папки
             sourceFile.delete()
             android.widget.Toast.makeText(context, "Фото сохранено в галерее!", android.widget.Toast.LENGTH_SHORT).show()
+            
+            return destFileName
         } else {
             android.widget.Toast.makeText(context, "Ошибка: файл не создан!", android.widget.Toast.LENGTH_SHORT).show()
+            return null
         }
     } catch (e: Exception) {
         e.printStackTrace()
         android.widget.Toast.makeText(context, "Ошибка: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+        return null
     }
 }

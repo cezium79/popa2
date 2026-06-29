@@ -40,6 +40,8 @@ import androidx.core.content.FileProvider
 import java.io.File
 import android.graphics.BitmapFactory
 import android.provider.MediaStore
+import android.nfc.NfcAdapter
+import androidx.activity.ComponentActivity
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,7 +84,7 @@ fun OhrannikCabinetScreen(
     var inputTextValue by remember { mutableStateOf("") } // Текст внутри поля ввода показаний
     
     // Для съемки фото
-    var photoCheckpointName by remember { mutableStateOf("") }
+    var photoCheckpointId by remember { mutableStateOf("") }
     
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -94,15 +96,109 @@ fun OhrannikCabinetScreen(
         onResult = { granted -> hasStoragePermission = granted }
     )
     
-    // Запуск экрана фото при изменении photoCheckpointName
-    LaunchedEffect(photoCheckpointName) {
-        if (photoCheckpointName.isNotEmpty()) {
-            // Переход на экран фото с передачей manager и имени чекпоинта
-            onNavigateToPhoto(manager, photoCheckpointName)
+    // Запуск экрана фото при изменении photoCheckpointId
+    LaunchedEffect(photoCheckpointId) {
+        if (photoCheckpointId.isNotEmpty()) {
+            // Переход на экран фото с передачей manager и ID чекпоинта
+            onNavigateToPhoto(manager, photoCheckpointId)
             // Очищаем после использования
-            photoCheckpointName = ""
+            photoCheckpointId = ""
         }
     }
+    
+    // NFC сканер включён постоянно для автоматического считывания NFC-тегов
+    val activity = context as? ComponentActivity
+    var nfcAdapter by remember { mutableStateOf<NfcAdapter?>(null) }
+    var nfcScanResult by remember { mutableStateOf<String?>(null) }
+    
+    LaunchedEffect(Unit) {
+        try {
+            nfcAdapter = NfcAdapter.getDefaultAdapter(context)
+        } catch (e: Exception) {
+            // NFC не поддерживается
+        }
+    }
+    
+    // Всегда включаем NFC reader mode для фонового сканирования
+    LaunchedEffect(activity) {
+        if (nfcAdapter != null && activity != null) {
+            try {
+                nfcAdapter?.enableReaderMode(
+                    activity,
+                    { tag ->
+                        val nfcId = tag.id.joinToString(":") { byte -> String.format("%02X", byte) }
+                        nfcScanResult = nfcId
+                    },
+                    NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B,
+                    null
+                )
+            } catch (e: Exception) {
+                // Error handling
+            }
+        }
+    }
+    
+    // Обработка NFC сканирования - ищем чекпоинт по NFC-ID
+    LaunchedEffect(nfcScanResult) {
+        if (nfcScanResult != null) {
+            val scannedNfcId = nfcScanResult!!
+            val checkpoint = manager.getCheckpointByNfcId(scannedNfcId)
+            
+            if (checkpoint != null) {
+                // NFC-ID найден в базе - обрабатываем в зависимости от типа
+                when (checkpoint.action) {
+                    CheckpointAction.CHECKPOINT -> {
+                        // Сохраняем в логи SharedPreferences
+                        val logText = "NFC-чекпоинт: ${checkpoint.name} -> ID: ${checkpoint.id}"
+                        manager.saveScanResult(employeeName = employeeName, qrContent = logText)
+                        
+                        // Добавляем в shiftLogs для отображения в журнале текущих обходов
+                        val currentTime = java.text.SimpleDateFormat("HH:mm:ss dd.MM.yyyy", java.util.Locale.getDefault()).format(java.util.Date())
+                        QrHandler.addCheckpointToLog(
+                            type = "NFC-чекпоинт",
+                            titleOrLocation = "${checkpoint.name} (ID: ${checkpoint.id})",
+                            userResult = "Отметка пройдена",
+                            timestamp = currentTime
+                        )
+                        
+                        showCheckpointPassedDialog = QrResult.CheckpointPassed(
+                            checkpointId = checkpoint.id,
+                            name = checkpoint.name,
+                            timestamp = currentTime
+                        )
+                    }
+                    CheckpointAction.QUESTION -> {
+                        // Диалог с вопросом сохранит результат при выборе ответа
+                        showQuestionDialog = QrResult.QuestionFormat(
+                            checkpointId = checkpoint.id,
+                            checkpointName = checkpoint.name,
+                            text = checkpoint.questionText ?: "",
+                            answers = checkpoint.answers
+                        )
+                    }
+                    CheckpointAction.INPUT -> {
+                        // Диалог с вводом сохранит результат при нажатии "Сохранить"
+                        showInputDialog = QrResult.InputFormat(
+                            checkpointId = checkpoint.id,
+                            checkpointName = checkpoint.name,
+                            title = checkpoint.inputTitle ?: ""
+                        )
+                    }
+                    CheckpointAction.PHOTO -> {
+                        // PhotoFormat не сохраняется в логи автоматически - только при отправке фото
+                        photoCheckpointId = checkpoint.id
+                    }
+                }
+            } else {
+                // NFC-ID не найден в базе
+                showErrorDialog = "NFC-тег не найден в базе чекпоинтов"
+            }
+            
+            nfcScanResult = null
+        }
+    }
+    
+
 
     LaunchedEffect(key1 = true) {
         if (!hasCameraPermission) {
@@ -112,6 +208,7 @@ fun OhrannikCabinetScreen(
             storageLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
     }
+    
     Scaffold(
         topBar = {
             TopAppBar(
@@ -232,7 +329,7 @@ fun OhrannikCabinetScreen(
                                                                     }
                                                                     is QrResult.PhotoFormat -> {
                                                                         // Запоминаем ID чекпоинта и переходим на экран фото
-                                                                        photoCheckpointName = qrResult.checkpointId
+                                                                        photoCheckpointId = qrResult.checkpointId
                                                                     }
                                                                     is QrResult.ShiftReportTrigger -> {
                                                                         onNavigateToReports()
@@ -279,7 +376,7 @@ fun OhrannikCabinetScreen(
                             .border(BorderStroke(3.dp, Color.Green), RoundedCornerShape(16.dp))
                     )
 
-                    // Кнопка под рамкой
+                    // Кнопка под рамкой: QR
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -292,13 +389,14 @@ fun OhrannikCabinetScreen(
                             modifier = Modifier.width(200.dp).height(56.dp),
                             shape = RoundedCornerShape(28.dp)
                         ) {
-                            Text(text = "Сканировать", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text(text = "Сканировать QR", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         }
                     }
                 }
             }
         }
     }
+    
     // ================= РЕНДЕРИНГ ДИАЛОГОВЫХ ОКОН =================
 
     // 1. Диалог для обычной метки локации
@@ -329,15 +427,25 @@ fun OhrannikCabinetScreen(
             text = {
                 Column {
                     Text(
-                        text = result.text,
+                        text = result.questionText,
                         modifier = Modifier.padding(bottom = 12.dp),
                         fontWeight = FontWeight.Medium
                     )
                     result.answers.forEach { answer ->
                         Button(
                             onClick = {
-                                val logText = "Чек-лист: ${result.text} -> Ответ: $answer"
+                                val logText = "Чек-лист: ${result.questionText} -> Ответ: $answer"
                                 manager.saveScanResult(employeeName = employeeName, qrContent = logText)
+                                
+                                // Добавляем в shiftLogs для отображения в журнале текущих обходов
+                                val currentTime = java.text.SimpleDateFormat("HH:mm:ss dd.MM.yyyy", java.util.Locale.getDefault()).format(java.util.Date())
+                                QrHandler.addCheckpointToLog(
+                                    type = "NFC-чекпоинт",
+                                    titleOrLocation = "${result.checkpointName} (ID: ${result.checkpointId})",
+                                    userResult = "Отметка пройдена",
+                                    timestamp = currentTime
+                                )
+                                
                                 showQuestionDialog = null
                             },
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -360,7 +468,7 @@ fun OhrannikCabinetScreen(
             title = { Text("Ввод данных") },
             text = {
                 Column {
-                    Text(text = result.title, modifier = Modifier.padding(bottom = 8.dp))
+                    Text(text = result.titleText, modifier = Modifier.padding(bottom = 8.dp))
                     OutlinedTextField(
                         value = inputTextValue,
                         onValueChange = { inputTextValue = it },
@@ -373,8 +481,17 @@ fun OhrannikCabinetScreen(
                 Button(
                     onClick = {
                         if (inputTextValue.isNotBlank()) {
-                            val logText = "Показания: ${result.title} -> Введено: $inputTextValue"
+                            val logText = "Показания: ${result.titleText} -> Введено: $inputTextValue"
                             manager.saveScanResult(employeeName = employeeName, qrContent = logText)
+                            
+                            // Добавляем в shiftLogs для отображения в журнале текущих обходов
+                            val currentTime = java.text.SimpleDateFormat("HH:mm:ss dd.MM.yyyy", java.util.Locale.getDefault()).format(java.util.Date())
+                            QrHandler.addCheckpointToLog(
+                                type = "NFC-чекпоинт",
+                                titleOrLocation = "${result.checkpointName} (ID: ${result.checkpointId})",
+                                userResult = "Отметка пройдена",
+                                timestamp = currentTime
+                            )
 
                             inputTextValue = "" // ОЧИСТКА ПОЛЯ: Сбрасываем текст, чтобы поле было пустым в следующий раз
                             showInputDialog = null

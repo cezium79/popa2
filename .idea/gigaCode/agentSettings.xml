@@ -6,6 +6,18 @@
         <Execute>
           <option name="pattern" value="cd H:/AndroidProjects/Ohrana-c7953c45 ; ./gradlew assembleDebug 2&gt;&amp;1 | Select-String -Pattern &quot;BUILD|ERROR|warning|FAILED&quot; | Select-Object -Last 20" />
         </Execute>
+        <Execute>
+          <option name="pattern" value="./gradlew assembleDebug" />
+        </Execute>
+        <Execute>
+          <option name="pattern" value="./gradlew assembleDebug 2&gt;&amp;1 | Select-String -Pattern &quot;BUILD|error|Error&quot; | Select-Object -First 10" />
+        </Execute>
+        <Execute>
+          <option name="pattern" value="Get-Command adb -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source" />
+        </Execute>
+        <Execute>
+          <option name="pattern" value="cd H:/AndroidProjects/Ohrana-c7953c45 ; .\gradlew.bat assembleDebug" />
+        </Execute>
       </list>
     </option>
   </component>

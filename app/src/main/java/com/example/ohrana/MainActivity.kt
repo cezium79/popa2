@@ -28,6 +28,12 @@ class MainActivity : ComponentActivity() {
             AppNavigation()
         }
     }
+    
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        // Сохраняем intent для обработки NFC-тегов
+        setIntent(intent)
+    }
 }
 @Composable
 fun AdminPasswordDialog(
@@ -81,13 +87,10 @@ fun AppNavigation() {
     var previousScreenWasAdmin by remember { mutableStateOf(false) }
     var currentScreen by remember { mutableStateOf("privet") }
     var selectedEmployeeName by remember { mutableStateOf("") }
-    var selectedCheckpointName by remember { mutableStateOf("") }
+    var selectedCheckpointId by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
     val prefsManager = remember { SharedPrefsManager(context) }
-
-    // Храним список чекпоинтов для навигации в CheckpointPropertiesScreen
-    var checkpointListForProps by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val employeeList = remember {
         val savedList = prefsManager.loadEmployees()
@@ -200,23 +203,32 @@ fun AppNavigation() {
                 previousScreenWasAdmin = false
                 currentScreen = "spisok_otchetov"
             },
-            onNavigateToPhoto = { manager, checkpointName ->
-                selectedCheckpointName = checkpointName
+            onNavigateToPhoto = { manager, checkpointId ->
+                selectedCheckpointId = checkpointId
                 currentScreen = "photo_capture"
             }
         )
 
         // Экран захвата фото
         "photo_capture" -> PhotoCaptureScreen(
-            checkpointName = selectedCheckpointName,
+            checkpointId = selectedCheckpointId ?: "",
             onPhotoTaken = { fileName ->
                 // Сохраняем путь к фото в SharedPreferences
-                val logText = "Фото прибора: $selectedCheckpointName -> Файл: $fileName"
+                val logText = "Фото прибора: $selectedCheckpointId -> Файл: $fileName"
                 prefsManager.saveScanResult(employeeName = selectedEmployeeName, qrContent = logText)
+                
+                // Добавляем в shiftLogs для отображения в журнале текущих обходов
+                val currentTime = java.text.SimpleDateFormat("HH:mm:ss dd.MM.yyyy", java.util.Locale.getDefault()).format(java.util.Date())
+                QrHandler.addCheckpointToLog(
+                    type = "NFC-чекпоинт",
+                    titleOrLocation = "$selectedCheckpointId",
+                    userResult = "Отметка пройдена",
+                    timestamp = currentTime
+                )
             },
             onBack = {
                 // При возврате очищаем ID чекпоинта и возвращаемся в cabinet
-                selectedCheckpointName = ""
+                selectedCheckpointId = null
                 currentScreen = "ohrannik_cabinet"
             },
             prefsManager = prefsManager,
@@ -238,20 +250,27 @@ fun AppNavigation() {
 
         // Экран управления маршрутами (Новый блок)
         "routes" -> MarshrutiScreen(
-            onNavigateToCheckpointProperties = { checkpoints -> 
-                checkpointListForProps = checkpoints
-                currentScreen = "checkpoint_properties" 
+            onNavigateToCheckpointEditor = { checkpointId -> 
+                selectedCheckpointId = checkpointId
+                currentScreen = "checkpoint_editor" 
             },
+            onNavigateToSchedule = { currentScreen = "schedule" },
             onBack = { currentScreen = "admin" }
         )
 
-        // Экран редактирования свойств чекпоинтов
-        "checkpoint_properties" -> CheckpointPropertiesScreen(
-            checkpointList = checkpointListForProps,
-            onBack = { currentScreen = "routes" },
-            onPropertiesChanged = { updatedProperties ->
-                // Обновляем свойства в памяти
-            }
+        // Экран расписания обходов
+        "schedule" -> ScheduleScreen(
+            onBack = { currentScreen = "routes" }
+        )
+
+        // Экран редактирования чекпоинта
+        "checkpoint_editor" -> CheckpointEditorScreen(
+            checkpointId = selectedCheckpointId ?: "",
+            onBack = { 
+                selectedCheckpointId = null
+                currentScreen = "routes" 
+            },
+            onSave = { /* Обновление списка происходит внутри редактора */ }
         )
 
         // Дополнительный экран: Список охранников
